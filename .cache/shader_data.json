@@ -1,0 +1,27 @@
+{
+  "shaders/fragment.slang": {
+    "slang": "shaders/fragment.slang",
+    "spv": ".cache/fragment.spv",
+    "timestamp": 1764868065
+  },
+  "shaders/update.slang": {
+    "slang": "shaders/update.slang",
+    "spv": ".cache/update.spv",
+    "timestamp": 1764924947
+  },
+  "shaders/downsample.slang": {
+    "slang": "shaders/downsample.slang",
+    "spv": ".cache/downsample.spv",
+    "timestamp": 1764924938
+  },
+  "shaders/vertex.slang": {
+    "slang": "shaders/vertex.slang",
+    "spv": ".cache/vertex.spv",
+    "timestamp": 1764924955
+  },
+  "shaders/scatter.slang": {
+    "slang": "shaders/scatter.slang",
+    "spv": ".cache/scatter.spv",
+    "timestamp": 1764924928
+  }
+}

@@ -1,0 +1,12 @@
+[package]
+name = "n-body"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+nexion = "*"
+bytemuck = "*"
+winit = "*"
+glam = "*"
+rustc-hash = "*"
+rand = "*"

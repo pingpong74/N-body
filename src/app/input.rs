@@ -16,6 +16,7 @@ pub struct InputManager {
     scroll_delta: f32,
 }
 
+#[allow(unused)]
 impl InputManager {
     pub fn new() -> Self {
         return InputManager {

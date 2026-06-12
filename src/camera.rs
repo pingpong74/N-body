@@ -36,9 +36,6 @@ impl Camera {
         self.aspect = width as f32 / height as f32;
     }
 
-    // ==============================
-    // Directions derived from Quat
-    // ==============================
     pub fn forward(&self) -> Vec3 {
         Vec3::new(
             (self.yaw.cos() * self.pitch.cos()) as f32,
@@ -60,9 +57,6 @@ impl Camera {
         1.0 / (self.fovy * 0.5).tan()
     }
 
-    // ==============================
-    // Matrices
-    // ==============================
     pub fn projection(&self) -> Mat4 {
         let mut m = Mat4::perspective_rh(self.fovy, self.aspect, self.znear, self.zfar);
         m.y_axis.y *= -1.0;
@@ -77,16 +71,11 @@ impl Camera {
         self.projection() * self.view()
     }
 
-    // ==============================
-    // Input handling
-    // ==============================
     pub fn process_input(&mut self, input: &InputManager, dt: f32) {
-        // ----------- Mouse look via quaternion multiplication -----------
         let (dx, dy) = input.mouse_delta();
         self.yaw -= dx * self.mouse_sensitivity;
         self.pitch -= dy * self.mouse_sensitivity;
 
-        // clamp pitch to avoid flipping
         let max_pitch = 89_f64.to_radians();
         self.pitch = self.pitch.clamp(-max_pitch, max_pitch);
 
@@ -97,7 +86,6 @@ impl Camera {
             );
         }
 
-        // ----------- Movement -----------
         let mut vel = Vec3::ZERO;
 
         if input.is_key_down(KeyCode::KeyW) {

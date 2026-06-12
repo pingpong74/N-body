@@ -1,20 +1,18 @@
-#pragma once
 
-#include "nexion.slang"
+module common;
 
-struct Particle {
-  float mass;
-  float3 vel;
-  float3 pos;
-  float radius;
+public struct Particle {
+  float4 velocity_mass;
+  float4 position_radius;
+
+  public float3 position() { return position_radius.xyz; }
+  public float3 radius() { return position_radius.w; }
+
+  public float3 velocity() { return velocity_mass.xyz; }
+  public float mass() { return velocity_mass.w; }
 };
 
-static const uint GROUP_SIZE = 256;
-static const uint NO_OF_LODS = 4;
-
-static const uint LOD_0_BINDING = 0;
-static const uint LOD_1_BINDING = 1;
-static const uint LOD_2_BINDING = 2;
-static const uint LOD_3_BINDING = 3;
-
-static const uint PARTICLES_BINDING = 4;
+public struct Bounds {
+  public float3 max;
+  public float3 min;
+}

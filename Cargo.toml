@@ -1,12 +1,16 @@
 [package]
 name = "n-body"
+build = "build.rs"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-nexion = "*"
+sgpu = {path = "../sgpu" }
 bytemuck = "*"
 winit = "*"
 glam = "*"
 rustc-hash = "*"
 rand = "*"
+
+[package.metadata.rust-analyzer]
+rustc_source = "discover"

@@ -50,7 +50,7 @@ impl ApplicationHandler for Runner {
                 app.update(size.width, size.height);
                 window.request_redraw();
                 let duration = instant.elapsed();
-                println!("{}\r", duration.as_millis());
+                //println!("{}\r", duration.as_millis());
             }
 
             WindowEvent::Resized(size) => {
@@ -69,11 +69,33 @@ impl ApplicationHandler for Runner {
 fn main() {
     sgpu::add_shader_directory("shaders/");
 
+    const N: usize = 32;
+
+    let particles: Vec<Particle> = (0..N)
+        .map(|i| {
+            let t = i as f32 / N as f32;
+            Particle {
+                position: [
+                    (t * 37.0).sin() * 75.0,
+                    (t * 53.0).cos() * 75.0,
+                    (t * 71.0).sin() * 75.0,
+                ],
+                velocity: [
+                    (t * 51.0).sin() * 0.0,
+                    (t * 25.5).cos() * 0.0,
+                    (t * 7.0).sin() * 0.0,
+                ],
+                mass: 1.0,
+                radius: 1.5 + (t * 10.0).sin(),
+            }
+        })
+        .collect();
+
     let event_loop = EventLoop::new().unwrap();
     let mut runner = Runner {
         app: None,
         window: None,
-        particles: Some(vec![]),
+        particles: Some(particles),
     };
 
     event_loop.run_app(&mut runner).unwrap();

@@ -85,19 +85,28 @@ public struct ReadOnlyBuffer<T> {
 public struct ReadWriteBuffer<T> {
   uint handle;
 
+  public T load(uint byte_offset = 0) {
+    return _rw_buffers[NonUniformResourceIndex(handle)].Load<T>(byte_offset);
+  }
+
   public T load_indexed(uint index) {
     return _rw_buffers[NonUniformResourceIndex(handle)].Load<T>(index *
                                                                 sizeof(T));
   }
 
-  public void store_indexed(uint index, T value) {
+  public void store(T value, uint byte_offset = 0) {
+    _rw_buffers[NonUniformResourceIndex(handle)].Store<T>(byte_offset, value);
+  }
+
+  public void store_indexed(T value, uint index) {
     _rw_buffers[NonUniformResourceIndex(handle)].Store<T>(index * sizeof(T),
                                                           value);
   }
 
   public __subscript(uint index)->T {
     get { return load_indexed(index); }
-    set { store_indexed(index, newValue); }
+  // an issue?
+    set { store_indexed(newValue, index); }
   }
 
   public uint interlocked_add(uint byte_offset, uint value) {

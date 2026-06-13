@@ -121,7 +121,8 @@ void main(uint3 grp_thread_id: SV_GroupThreadID, uint3 grp_id: SV_GroupID) {
       }
 
       out_buffer[binOffset + prefix] = element_in;
-      out_index_buffer[binOffset + prefix] = in_index_buffer[elementId];
+      uint index_val = (pc.shift == 0) ? elementId : in_index_buffer[elementId];
+      out_index_buffer[binOffset + prefix] = index_val;
 
       if (prefix == count - 1) {
         InterlockedAdd(global_offsets[binID], count);

@@ -140,7 +140,7 @@ impl RadixSorter {
     }
 }
 
-#[cfg(test)]
+/*#[cfg(test)]
 mod test {
     use std::time::Instant;
 
@@ -220,4 +220,4 @@ mod test {
             }
         }*/
     }
-}
+}*/

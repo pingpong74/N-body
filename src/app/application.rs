@@ -4,7 +4,7 @@ use winit::{
     window::Window,
 };
 
-use crate::{app::input::InputManager, camera::Camera};
+use crate::{app::input::InputManager, camera::Camera, renderer::Renderer, simulator::Simulator};
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -19,6 +19,9 @@ pub struct Application {
     input_manager: InputManager,
     swapchain: Swapchain,
     camera: Camera,
+
+    simulator: Simulator,
+    renderer: Renderer,
 }
 
 impl Application {
@@ -30,7 +33,7 @@ impl Application {
             window,
             &SwapchainDescription {
                 format: sgpu::Format::Rgba16Float,
-                frames_in_flight: 2,
+                frames_in_flight: 1,
                 width: size.width,
                 height: size.height,
             },
@@ -39,10 +42,9 @@ impl Application {
         return Application {
             input_manager: InputManager::new(),
             swapchain: swapchain,
-            camera: Camera::new(
-                glam::Vec3::new(31201.0, 31996.0, 49475.0),
-                size.width as f32 / size.height as f32,
-            ),
+            camera: Camera::new(glam::Vec3::new(100.0, 0.0, 100.0), size.width as f32 / size.height as f32),
+            simulator: Simulator::new(&particles),
+            renderer: Renderer::new(particles.len() as u32, size),
         };
     }
 
@@ -57,6 +59,7 @@ impl Application {
     pub fn resize(&mut self, width: u32, height: u32) {
         self.camera.resize(width, height);
         self.swapchain.resize(width, height);
+        self.renderer.resize(width, height);
     }
 
     pub fn update(&mut self, width: u32, height: u32) {
@@ -64,5 +67,22 @@ impl Application {
         self.input_manager.begin_frame();
 
         let swapchain_image = self.swapchain.acquire_image();
+
+        let mut compute_cmd = record(QueueType::Compute);
+        self.simulator.record_simulation(&mut compute_cmd);
+        let compute_finish = submit(&[compute_cmd]);
+
+        let mut render_recorder = record(QueueType::Graphics);
+        render_recorder.wait_for(compute_finish, PipelineStage::TOP_OF_PIPE);
+        render_recorder.barriers(
+            Some(&GlobalBarrier {
+                previous_accesses: &[AccessType::ComputeShaderStorageWrite],
+                next_accesses: &[AccessType::VertexShaderStorageRead],
+            }),
+            &[],
+        );
+        self.renderer.record_rendering(&mut render_recorder, &self.camera, &swapchain_image, &self.simulator.particle_buffer);
+
+        self.swapchain.present(&swapchain_image, submit(&[render_recorder]));
     }
 }

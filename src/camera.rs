@@ -23,7 +23,7 @@ impl Camera {
             position,
             yaw: -0.769,
             pitch: 0.0679,
-            move_speed: 10000.0,
+            move_speed: 100.0,
             mouse_sensitivity: 0.002,
             aspect,
             fovy: 70_f32.to_radians(),
@@ -37,12 +37,7 @@ impl Camera {
     }
 
     pub fn forward(&self) -> Vec3 {
-        Vec3::new(
-            (self.yaw.cos() * self.pitch.cos()) as f32,
-            (self.pitch.sin()) as f32,
-            (self.yaw.sin() * self.pitch.cos()) as f32,
-        )
-        .normalize()
+        Vec3::new((self.yaw.cos() * self.pitch.cos()) as f32, (self.pitch.sin()) as f32, (self.yaw.sin() * self.pitch.cos()) as f32).normalize()
     }
 
     pub fn right(&self) -> Vec3 {
@@ -80,10 +75,7 @@ impl Camera {
         self.pitch = self.pitch.clamp(-max_pitch, max_pitch);
 
         if input.just_pressed(KeyCode::KeyE) {
-            println!(
-                "Pos: {} Yaw: {} Pitch: {}",
-                self.position, self.yaw, self.pitch
-            );
+            println!("Pos: {} Yaw: {} Pitch: {}", self.position, self.yaw, self.pitch);
         }
 
         let mut vel = Vec3::ZERO;

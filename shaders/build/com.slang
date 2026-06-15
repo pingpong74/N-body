@@ -16,10 +16,9 @@ PushConstants pc;
 [numthreads(256, 1, 1)]
 void main(uint3 dispatch_id: SV_DispatchThreadID) {
   uint n = pc.num_of_particles;
-  if (dispatch_id.x >= n)
+  if (dispatch_id.x >= n) {
     return;
-
-  uint i = (n - 1) - dispatch_id.x;
+  }
 
   let particles = get_buffer<Particle>(pc.particle_buffer_id);
   let indices = get_buffer<uint>(pc.indices_buffer_id);
@@ -27,8 +26,8 @@ void main(uint3 dispatch_id: SV_DispatchThreadID) {
   var counters = get_rw_buffer<uint>(pc.counter_buffer_id);
 
   // initialize this leaf
-  uint leaf = i + n - 1;
-  uint particle_idx = indices[i];
+  uint leaf = dispatch_id.x + n - 1;
+  uint particle_idx = indices[dispatch_id.x];
   Particle p = particles[particle_idx];
   float3 pos = p.position();
 
@@ -43,8 +42,9 @@ void main(uint3 dispatch_id: SV_DispatchThreadID) {
   uint node = nodes[leaf].parent;
   while (true) {
     uint prev = counters.interlocked_add(node * 4, 1);
-    if (prev == 0)
-      break;
+    if (prev == 0) {
+      return;
+    }
 
     uint L = nodes[node].left;
     uint R = nodes[node].right;
@@ -61,11 +61,12 @@ void main(uint3 dispatch_id: SV_DispatchThreadID) {
 
     nodes[node].aabb_min = float4(min(lmin, rmin), 0.0);
     nodes[node].aabb_max = float4(max(lmax, rmax), 0.0);
-    nodes[node].com = float4(lcom + rcom, lmass + rmass);
-    nodes[node].is_leaf = 0;
+    nodes[node].com = float4((lcom + rcom), lmass + rmass);
 
-    if (node == 0)
-      break; // reached root
+    if (node == 0) {
+      break;
+    }
+
     node = nodes[node].parent;
   }
 }

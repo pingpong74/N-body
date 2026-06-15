@@ -30,6 +30,7 @@ fn main() {
 
     // tree building
     compile_shader("shaders/build/tree.slang", "compiled/tree.spv");
+    compile_shader("shaders/build/parent.slang", "compiled/parent.spv");
     compile_shader("shaders/build/com.slang", "compiled/com.spv");
 
     // integration

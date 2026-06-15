@@ -62,8 +62,8 @@ impl Application {
         self.renderer.resize(width, height);
     }
 
-    pub fn update(&mut self, width: u32, height: u32) {
-        self.camera.process_input(&self.input_manager, 1.0 / 60.0);
+    pub fn update(&mut self, width: u32, height: u32, dt: f32) {
+        self.camera.process_input(&self.input_manager, dt);
         self.input_manager.begin_frame();
 
         let swapchain_image = self.swapchain.acquire_image();

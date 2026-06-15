@@ -44,9 +44,28 @@ float4 main(VertexOutput in) : SV_Target {
   float3 lightDir = normalize(float3(-1, 1, 1));
   float diffuse = saturate(dot(normal, lightDir));
 
-  float t_mass = saturate(in.mass / 2.0);
-  float3 color = lerp(float3(0.2, 0.4, 1.0), float3(1.0, 0.3, 0.1), t_mass);
-  color *= (0.3 + 0.7 * diffuse);
+  return float4(color(in.mass, in.radius, normal), 1.0);
+}
 
-  return float4(color, 1.0);
+float3 color(float mass, float radius, float3 normal) {
+  float massNorm = saturate(mass / 2.0);
+  massNorm = pow(massNorm, 1.5);
+  float3 hotColor = float3(0.6, 0.8, 1.0);
+  float3 midColor = float3(1.0, 1.0, 1.0);
+  float3 coolColor = float3(1.0, 0.4, 0.1);
+  float3 color = lerp(hotColor, midColor, saturate(massNorm * 1.5));
+
+  color = lerp(color, coolColor, saturate((massNorm - 0.5) * 2.0));
+  float radiusGlow = saturate(radius / 3.0);
+  radiusGlow = pow(radiusGlow, 2.0);
+
+  color *= (0.6 + 0.8 * radiusGlow);
+  float3 lightDir = normalize(float3(-1, 1, 1));
+  float diffuse = saturate(dot(normal, lightDir));
+  diffuse = 0.25 + 0.75 * diffuse; // avoid flat black sides
+
+  color *= diffuse; 
+  color += 0.05 * radiusGlow;
+
+  return pow(color, 0.9);
 }

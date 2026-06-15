@@ -1,6 +1,5 @@
-use std::num;
-
 use sgpu::*;
+use winit::event::MouseButton;
 
 use crate::{app::application::Particle, radix_sort::RadixSorter};
 
@@ -31,6 +30,12 @@ struct BuildTreePc {
     node_buffer_id: u32,
     num_of_particles: u32,
 }
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ParentsPc {
+    node_buffer_id: u32,
+    num_of_particles: u32,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -58,6 +63,7 @@ pub struct SimulationPipelines {
     bound: ComputePipeline,
     morton: ComputePipeline,
     build_tree: ComputePipeline,
+    parent_set: ComputePipeline,
     compute_mass: ComputePipeline,
     integrate: ComputePipeline,
 }
@@ -68,6 +74,7 @@ impl SimulationPipelines {
             bound: create_compute_pipeline(include_bytes!("../compiled/bounds.spv")),
             morton: create_compute_pipeline(include_bytes!("../compiled/morton_code.spv")),
             build_tree: create_compute_pipeline(include_bytes!("../compiled/tree.spv")),
+            parent_set: create_compute_pipeline(include_bytes!("../compiled/parent.spv")),
             compute_mass: create_compute_pipeline(include_bytes!("../compiled/com.spv")),
             integrate: create_compute_pipeline(include_bytes!("../compiled/integrate.spv")),
         };
@@ -75,6 +82,7 @@ impl SimulationPipelines {
 }
 
 pub struct Simulator {
+    debug: Buffer,
     read_back: Buffer,
     pub particle_buffer: Buffer,
 
@@ -99,9 +107,15 @@ impl Simulator {
         let num_of_particles = particles.len() as u64;
 
         let staging = create_buffer(&BufferDescription {
-            usage: BufferUsage::TRANSFER_DST | BufferUsage::TRANSFER_SRC,
+            usage: BufferUsage::TRANSFER_DST | BufferUsage::TRANSFER_SRC | BufferUsage::STORAGE,
             size: particle_size * num_of_particles * 4,
             memory_type: MemoryType::PreferHost,
+        });
+
+        let debug = create_buffer(&BufferDescription {
+            usage: BufferUsage::TRANSFER_DST | BufferUsage::TRANSFER_SRC | BufferUsage::STORAGE,
+            size: particle_size * num_of_particles * 4,
+            memory_type: MemoryType::DeviceLocal,
         });
 
         let particle_buffer = create_buffer(&sgpu::BufferDescription {
@@ -154,6 +168,7 @@ impl Simulator {
         });
 
         return Simulator {
+            debug: debug,
             read_back: staging,
             particle_buffer: particle_buffer,
             bounds_buffer: bounds,
@@ -213,11 +228,41 @@ impl Simulator {
             &[],
         );
 
+        cmd.fill_buffer(&self.tree_buffer, 0, 2 * self.num_of_particles as u64 * NODE_SIZE, 1000000000);
+        cmd.barriers(
+            Some(&GlobalBarrier {
+                previous_accesses: &[AccessType::TransferWrite],
+                next_accesses: &[
+                    AccessType::ComputeShaderStorageWrite,
+                    AccessType::ComputeShaderStorageRead,
+                ],
+            }),
+            &[],
+        );
+
         // build the tree
         cmd.bind_compute_pipeline(&self.pipelines.build_tree);
         cmd.push_constants(&BuildTreePc {
             morton_buffer_id: self.morton_buffer.descriptor_index(),
             indices_buffer_id: self.indices.descriptor_index(),
+            node_buffer_id: self.tree_buffer.descriptor_index(),
+            num_of_particles: self.num_of_particles,
+        });
+        cmd.dispatch(u32::div_ceil(self.num_of_particles - 1, 256), 1, 1);
+        cmd.barriers(
+            Some(&GlobalBarrier {
+                previous_accesses: &[AccessType::ComputeShaderStorageWrite],
+                next_accesses: &[
+                    AccessType::ComputeShaderStorageWrite,
+                    AccessType::ComputeShaderStorageRead,
+                ],
+            }),
+            &[],
+        );
+
+        // a pass for setting parents
+        cmd.bind_compute_pipeline(&self.pipelines.parent_set);
+        cmd.push_constants(&ParentsPc {
             node_buffer_id: self.tree_buffer.descriptor_index(),
             num_of_particles: self.num_of_particles,
         });
@@ -231,7 +276,7 @@ impl Simulator {
         );
 
         // compute com for each node
-        cmd.fill_buffer(&self.counter, 0, u64::MAX, 0);
+        cmd.fill_buffer(&self.counter, 0, (self.num_of_particles as u64 - 1) * 4, 0);
         cmd.barriers(
             Some(&GlobalBarrier {
                 previous_accesses: &[AccessType::TransferWrite],
@@ -265,8 +310,8 @@ impl Simulator {
             node_buffer_id: self.tree_buffer.descriptor_index(),
             num_of_particles: self.num_of_particles,
             dt: 0.016,
-            theta: 0.9,
-            epsilon: 0.7,
+            theta: 0.8,
+            epsilon: 0.3,
         });
         cmd.dispatch(groups, 1, 1);
     }
@@ -286,97 +331,243 @@ impl Simulator {
         let ptr = bytes.as_ptr() as *const T;
         unsafe { std::slice::from_raw_parts(ptr, count).to_vec() }
     }
+
+    pub fn record_and_time_simulation(&self) {
+        // Time each pass individually by submitting and waiting separately
+        let groups = u32::div_ceil(self.num_of_particles, 256);
+
+        let time_pass = |name: &str, f: &dyn Fn(&mut CommandBuffer)| {
+            let mut cmd = record(QueueType::Compute);
+            f(&mut cmd);
+            let start = std::time::Instant::now();
+            wait(submit(&[cmd]));
+            println!("{}: {:.2}ms", name, start.elapsed().as_secs_f64() * 1000.0);
+        };
+
+        time_pass("bounds", &|cmd| {
+            cmd.fill_buffer(&self.bounds_buffer, 0, 4 * 4, 0);
+            cmd.fill_buffer(&self.bounds_buffer, 4 * 4, 4 * 4, 0xFFFFFFFF);
+            cmd.bind_compute_pipeline(&self.pipelines.bound);
+            cmd.push_constants(&BoundsPc {
+                particle_buffer_id: self.particle_buffer.descriptor_index(),
+                num_of_particles: self.num_of_particles,
+                bounds_buffer_id: self.bounds_buffer.descriptor_index(),
+            });
+            cmd.dispatch(groups, 1, 1);
+        });
+
+        time_pass("morton", &|cmd| {
+            cmd.bind_compute_pipeline(&self.pipelines.morton);
+            cmd.push_constants(&MortonPc {
+                particle_buffer_id: self.particle_buffer.descriptor_index(),
+                morton_buffer_id: self.morton_buffer.descriptor_index(),
+                num_of_particles: self.num_of_particles,
+                bounds_buffer: self.bounds_buffer.descriptor_index(),
+            });
+            cmd.dispatch(groups, 1, 1);
+        });
+
+        time_pass("radix_sort", &|cmd| {
+            self.radix_sort.record(cmd, self.morton_buffer, self.indices);
+        });
+
+        time_pass("build_tree", &|cmd| {
+            cmd.fill_buffer(&self.tree_buffer, 0, 2 * self.num_of_particles as u64 * NODE_SIZE, 0);
+            cmd.barriers(
+                Some(&GlobalBarrier {
+                    previous_accesses: &[AccessType::TransferWrite],
+                    next_accesses: &[
+                        AccessType::ComputeShaderStorageWrite,
+                        AccessType::ComputeShaderStorageRead,
+                    ],
+                }),
+                &[],
+            );
+            cmd.bind_compute_pipeline(&self.pipelines.build_tree);
+            cmd.push_constants(&BuildTreePc {
+                morton_buffer_id: self.morton_buffer.descriptor_index(),
+                indices_buffer_id: self.indices.descriptor_index(),
+                node_buffer_id: self.tree_buffer.descriptor_index(),
+                num_of_particles: self.num_of_particles,
+            });
+            cmd.dispatch(u32::div_ceil(self.num_of_particles - 1, 256), 1, 1);
+        });
+
+        time_pass("parent_set", &|cmd| {
+            cmd.bind_compute_pipeline(&self.pipelines.parent_set);
+            cmd.push_constants(&ParentsPc {
+                node_buffer_id: self.tree_buffer.descriptor_index(),
+                num_of_particles: self.num_of_particles,
+            });
+            cmd.dispatch(u32::div_ceil(self.num_of_particles - 1, 256), 1, 1);
+        });
+
+        time_pass("compute_mass", &|cmd| {
+            cmd.fill_buffer(&self.counter, 0, (self.num_of_particles as u64 - 1) * 4, 0);
+            cmd.barriers(
+                Some(&GlobalBarrier {
+                    previous_accesses: &[AccessType::TransferWrite],
+                    next_accesses: &[AccessType::ComputeShaderStorageWrite],
+                }),
+                &[],
+            );
+            cmd.bind_compute_pipeline(&self.pipelines.compute_mass);
+            cmd.push_constants(&ComputeMassPc {
+                particle_buffer_id: self.particle_buffer.descriptor_index(),
+                indices_buffer_id: self.indices.descriptor_index(),
+                node_buffer_id: self.tree_buffer.descriptor_index(),
+                counter_buffer_id: self.counter.descriptor_index(),
+                num_of_particles: self.num_of_particles,
+            });
+            cmd.dispatch(groups, 1, 1);
+        });
+
+        time_pass("integrate", &|cmd| {
+            cmd.bind_compute_pipeline(&self.pipelines.integrate);
+            cmd.push_constants(&IntegratePc {
+                particle_buffer_id: self.particle_buffer.descriptor_index(),
+                indices_buffer_id: self.indices.descriptor_index(),
+                node_buffer_id: self.tree_buffer.descriptor_index(),
+                num_of_particles: self.num_of_particles,
+                dt: 0.016,
+                theta: 0.8,
+                epsilon: 0.3,
+            });
+            cmd.dispatch(groups, 1, 1);
+        });
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Node {
+    // keeping w component empty for safe alignment
+    aabb_min: [f32; 4],
+    aabb_max: [f32; 4],
+    // w component is the mass
+    com: [f32; 4],
+    left: u32,
+    right: u32,
+    parent: u32,
+    is_leaf: u32,
 }
 
 #[test]
 fn test() {
+    use rand::Rng;
+
     sgpu_init(&SgpuInititizationInfo::default());
 
-    const N: usize = 16;
+    const N: usize = 1 << 20;
+
+    let radius = 1000.0;
+    let mut rng = rand::rng();
 
     let particles: Vec<Particle> = (0..N)
-        .map(|i| {
-            let t = i as f32 / N as f32;
+        .map(|_| {
+            // Exponential radial distribution
+            let r = rng.random_range(0.0..radius);
+            let theta = rng.random_range(0.0..360.0f32).to_radians();
+
+            let x = r * theta.cos();
+            let z = r * theta.sin();
+
             Particle {
-                position: [
-                    (t * 37.0).sin() * 100.0,
-                    (t * 53.0).cos() * 100.0,
-                    (t * 71.0).sin() * 100.0,
-                ],
+                position: [x, 0.0, z],
                 velocity: [0.0; 3],
                 mass: 1.0,
-                radius: 1.0,
+                radius: 0.3,
             }
         })
         .collect();
 
-    println!("=== INPUT PARTICLES ===");
-    for i in 0..N {
-        println!("  [{}] pos=({:.2}, {:.2}, {:.2})", i, particles[i].position[0], particles[i].position[1], particles[i].position[2]);
-    }
-
     let sim = Simulator::new(&particles);
 
-    let mut c = record(sgpu::QueueType::Compute);
-    sim.record_simulation(&mut c);
-    wait(submit(&[c]));
-
-    // BOUNDS
-    let bounds_u = sim.readback_as::<u32>(&sim.bounds_buffer, 8);
-    let bounds_f = sim.readback_as::<f32>(&sim.bounds_buffer, 8);
-    println!("\n=== BOUNDS RAW (u32 hex / f32) ===");
-    for i in 0..8 {
-        println!("  [{}] = {:#010x} / {:.4}", i, bounds_u[i], bounds_f[i]);
+    for i in 0..10 {
+        println!("{}", i);
+        sim.record_and_time_simulation();
+        println!();
     }
 
-    // MORTON (before sort — but we only have post-sort morton)
-    let morton = sim.readback_as::<u32>(&sim.morton_buffer, N);
-    println!("\n=== MORTON CODES (post sort) ===");
-    for i in 0..N {
-        println!("  [{}] = {:#010x}", i, morton[i]);
+    let dbg = sim.readback_as::<Node>(&sim.tree_buffer, 2 * N - 1);
+    validate_and_trace(&dbg, N);
+}
+
+fn validate_and_trace(nodes: &[Node], num_particles: usize) {
+    let total_nodes = 2 * num_particles - 1;
+    let leaf_offset = num_particles - 1;
+
+    // 1. Find the first node with an invalid child pointer
+    for i in 0..leaf_offset {
+        let node = &nodes[i];
+        if node.left >= total_nodes as u32 {
+            println!("Invalid left child at internal node {}", i);
+            println!("  left = {}, right = {}", node.left, node.right);
+            println!("Tracing parent chain from this node up to root:");
+            let mut cur = i;
+            while cur != 0xFFFFFFFF as usize && cur < total_nodes {
+                println!("  node {}", cur);
+                let parent = nodes[cur].parent as usize;
+                if parent == 0xFFFFFFFF as usize {
+                    break;
+                }
+                cur = parent;
+            }
+            // Also find which node points to this node as a child
+            println!("Finding nodes that have this node as child:");
+            for j in 0..leaf_offset {
+                if nodes[j].left == i as u32 || nodes[j].right == i as u32 {
+                    println!("  node {} has this node as child (left={}, right={})", j, nodes[j].left, nodes[j].right);
+                }
+            }
+            panic!("Tree validation failed at node {}", i);
+        }
+        if node.right >= total_nodes as u32 {
+            println!("Invalid right child at internal node {}", i);
+            println!("  left = {}, right = {}", node.left, node.right);
+            let mut cur = i;
+            while cur != 0xFFFFFFFF as usize && cur < total_nodes {
+                println!("  node {}", cur);
+                let parent = nodes[cur].parent as usize;
+                if parent == 0xFFFFFFFF as usize {
+                    break;
+                }
+                cur = parent;
+            }
+            panic!("Tree validation failed at node {}", i);
+        }
     }
 
-    // INDICES
-    let indices = sim.readback_as::<u32>(&sim.indices, N);
-    println!("\n=== SORTED INDICES ===");
-    for i in 0..N {
-        println!("  [{}] -> particle {}", i, indices[i]);
+    // 2. Check that every internal node's parent pointer matches
+    for i in 0..leaf_offset {
+        let left = nodes[i].left as usize;
+        let right = nodes[i].right as usize;
+        if left < total_nodes && nodes[left].parent != i as u32 {
+            println!("Parent mismatch: node {} parent is {} but node {} has left child {}", left, nodes[left].parent, i, left);
+            let mut cur = i;
+            while cur != 0xFFFFFFFF as usize && cur < total_nodes {
+                println!("  node {}", cur);
+                let parent = nodes[cur].parent as usize;
+                if parent == 0xFFFFFFFF as usize {
+                    break;
+                }
+                cur = parent;
+            }
+            panic!("Parent validation failed");
+        }
+        if right < total_nodes && nodes[right].parent != i as u32 {
+            println!("Parent mismatch: node {} parent is {} but node {} has right child {}", right, nodes[right].parent, i, right);
+            let mut cur = i;
+            while cur != 0xFFFFFFFF as usize && cur < total_nodes {
+                println!("  node {}", cur);
+                let parent = nodes[cur].parent as usize;
+                if parent == 0xFFFFFFFF as usize {
+                    break;
+                }
+                cur = parent;
+            }
+            panic!("Parent validation failed");
+        }
     }
 
-    // FULL TREE DUMP
-    // Node = float4 aabb_min, float4 aabb_max, float4 com, uint left, uint right, uint parent, uint is_leaf
-    // = 16 floats = 16 u32s = 64 bytes
-    let num_nodes = 2 * N - 1; // n-1 internal + n leaves
-    let tree_f = sim.readback_as::<f32>(&sim.tree_buffer, num_nodes * 16);
-    let tree_u = sim.readback_as::<u32>(&sim.tree_buffer, num_nodes * 16);
-    println!("\n=== TREE NODES ({} total: {} internal, {} leaves) ===", num_nodes, N - 1, N);
-    for node in 0..num_nodes {
-        let b = node * 16;
-        let aabb_min = (tree_f[b + 0], tree_f[b + 1], tree_f[b + 2]);
-        let aabb_max = (tree_f[b + 4], tree_f[b + 5], tree_f[b + 6]);
-        let com = (tree_f[b + 8], tree_f[b + 9], tree_f[b + 10]);
-        let mass = tree_f[b + 11];
-        let left = tree_u[b + 12];
-        let right = tree_u[b + 13];
-        let parent = tree_u[b + 14];
-        let is_leaf = tree_u[b + 15];
-        let kind = if node < N - 1 { "INT" } else { "LEAF" };
-        println!(
-            "  node {:2} [{}] is_leaf={} left={:2} right={:2} parent={:2} mass={:.1} \
-                  com=({:.1},{:.1},{:.1}) aabb=[({:.1},{:.1},{:.1})->({:.1},{:.1},{:.1})]",
-            node, kind, is_leaf, left, right, parent, mass, com.0, com.1, com.2, aabb_min.0, aabb_min.1, aabb_min.2, aabb_max.0, aabb_max.1, aabb_max.2
-        );
-    }
-
-    // PARTICLES AFTER
-    let out_f = sim.readback_as::<f32>(&sim.particle_buffer, N * 8);
-    println!("\n=== PARTICLES AFTER 1 FRAME ===");
-    // Particle layout: float4 velocity_mass, float4 position_radius
-    for i in 0..N {
-        let b = i * 8;
-        let vel = (out_f[b + 0], out_f[b + 1], out_f[b + 2]);
-        let mass = out_f[b + 3];
-        let pos = (out_f[b + 4], out_f[b + 5], out_f[b + 6]);
-        println!("  [{}] pos=({:.3},{:.3},{:.3}) vel=({:.4},{:.4},{:.4}) mass={:.1}", i, pos.0, pos.1, pos.2, vel.0, vel.1, vel.2, mass);
-    }
+    println!("Tree validation passed.");
 }

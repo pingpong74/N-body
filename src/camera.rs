@@ -28,7 +28,7 @@ impl Camera {
             aspect,
             fovy: 70_f32.to_radians(),
             znear: 0.1,
-            zfar: 1000000.0,
+            zfar: 100000000.0,
         }
     }
 

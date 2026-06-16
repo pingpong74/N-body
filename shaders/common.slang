@@ -38,5 +38,5 @@ public struct Node {
   public uint left;
   public uint right;
   public uint parent;
-  public uint is_leaf;
+  public uint skip_index;
 };

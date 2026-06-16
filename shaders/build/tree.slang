@@ -110,12 +110,9 @@ void main(uint3 dispatch_id: SV_DispatchThreadID) {
 
   nodes[i].left = left;
   nodes[i].right = right;
-  nodes[i].is_leaf = 0;
-
-  // nodes[left].parent = i;
-  // nodes[right].parent = i;
 
   if (i == 0) {
     nodes[0].parent = 0xFFFFFFFFu;
+    nodes[0].skip_index = 0xFFFFFFFFu;
   }
 }

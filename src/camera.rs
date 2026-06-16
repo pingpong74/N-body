@@ -99,6 +99,8 @@ impl Camera {
             vel -= self.up();
         }
 
+        self.move_speed += 10.0 * input.scroll();
+
         if vel.length_squared() > 0.0 {
             vel = vel.normalize();
         }

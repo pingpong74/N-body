@@ -73,106 +73,30 @@ impl ApplicationHandler for Runner {
     }
 }
 
-fn gaussian(rng: &mut impl rand::Rng) -> f32 {
-    let u1: f32 = rng.random();
-    let u2: f32 = rng.random();
-
-    (-2.0 * u1.ln()).sqrt() * (TAU * u2).cos()
-}
-
-pub fn create_spiral_galaxy(count: usize, center: [f32; 3], galaxy_velocity: [f32; 3], radius: f32, arms: usize) -> Vec<Particle> {
-    let mut rng = rand::rng();
-
-    let mut particles = Vec::with_capacity(count);
-
-    let bulge_fraction = 0.15;
-    let bulge_count = (count as f32 * bulge_fraction) as usize;
-
-    // ------------------------
-    // Bulge
-    // ------------------------
-    for _ in 0..bulge_count {
-        let r = radius * 0.15 * rng.random::<f32>().powf(2.5);
-
-        let theta = rng.random_range(0.0..TAU);
-        let phi = rng.random_range(0.0..std::f32::consts::PI);
-
-        let x = r * phi.sin() * theta.cos();
-        let y = r * phi.cos();
-        let z = r * phi.sin() * theta.sin();
-
-        let mass = rng.random_range(5.0..20.0);
-
-        particles.push(Particle {
-            position: [
-                center[0] + x,
-                center[1] + y,
-                center[2] + z,
-            ],
-            velocity: galaxy_velocity,
-            mass,
-            radius: 0.3,
-        });
-    }
-
-    // ------------------------
-    // Disk + Arms
-    // ------------------------
-    for _ in bulge_count..count {
-        // Exponential radial distribution
-        let r = radius * rng.random::<f32>().powf(2.0);
-
-        let arm = rng.random_range(0..arms) as f32 * TAU / arms as f32;
-
-        // Logarithmic spiral
-        let spiral_theta = arm + 3.5 * (r / radius) * TAU + rng.random_range(-0.25..0.25);
-
-        let x = r * spiral_theta.cos();
-        let z = r * spiral_theta.sin();
-
-        // Gaussian thickness
-        let scale_height = radius * 0.03;
-
-        let y = gaussian(&mut rng) * scale_height;
-
-        // Heavier stars near center
-        let mass = 1.0 + 4.0 * (1.0 - r / radius).powf(2.0);
-
-        // Approximate circular velocity
-        let enclosed_mass = count as f32 * (r / radius).powf(1.5);
-
-        let orbital_speed = (enclosed_mass / (r + 1.0)).sqrt();
-
-        let tx = -spiral_theta.sin();
-        let tz = spiral_theta.cos();
-
-        particles.push(Particle {
-            position: [
-                center[0] + x,
-                center[1] + y,
-                center[2] + z,
-            ],
-            velocity: [
-                galaxy_velocity[0] + tx * orbital_speed + gaussian(&mut rng) * 0.5,
-                galaxy_velocity[1] + gaussian(&mut rng) * 0.5,
-                galaxy_velocity[2] + tz * orbital_speed + gaussian(&mut rng) * 0.5,
-            ],
-            mass,
-            radius: 0.3,
-        });
-    }
-
-    particles
-}
-
 fn main() {
     sgpu::add_shader_directory("shaders/");
 
-    let mut particles = Vec::new();
+    const N: usize = 1 << 18;
+    let radius = 2500.0;
+    let mut rng = rand::rng();
+    let particles: Vec<Particle> = (0..N)
+        .map(|_| {
+            let r = rng.random_range(0.0..radius);
+            let theta = rng.random_range(0.0..360.0f32).to_radians();
+            let x = r * theta.cos();
+            let z = r * theta.sin();
+            let y = rng.random_range(-150.0..150.0);
+            let vx = r * theta.sin();
+            let vz = -r * theta.cos();
 
-    particles.extend(create_spiral_galaxy(1 << 17, [-1500.0, 0.0, 0.0], [20.0, 0.0, 0.0], 1000.0, 4));
-
-    println!("{}", particles.len());
+            Particle {
+                position: [x, 0.0, z],
+                velocity: [0.0; 3],
+                mass: 10.0,
+                radius: 0.3,
+            }
+        })
+        .collect();
 
     let event_loop = EventLoop::new().unwrap();
     let mut runner = Runner {

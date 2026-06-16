@@ -34,6 +34,7 @@ fn main() {
     compile_shader("shaders/build/com.slang", "compiled/com.spv");
 
     // integration
+    compile_shader("shaders/build/skip_set.slang", "compiled/skip_set.spv");
     compile_shader("shaders/build/integrate.slang", "compiled/integrate.spv");
 
     // drawing

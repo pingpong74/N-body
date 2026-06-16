@@ -34,7 +34,6 @@ void main(uint3 dispatch_id: SV_DispatchThreadID) {
   nodes[leaf].aabb_min = float4(pos, 0.0);
   nodes[leaf].aabb_max = float4(pos, 0.0);
   nodes[leaf].com = float4(pos * p.mass(), p.mass()); // com.w = mass
-  nodes[leaf].is_leaf = 1;
   nodes[leaf].left = particle_idx; // store particle index for traversal later
   nodes[leaf].right = particle_idx;
 
@@ -46,18 +45,18 @@ void main(uint3 dispatch_id: SV_DispatchThreadID) {
       return;
     }
 
-    uint L = nodes[node].left;
-    uint R = nodes[node].right;
+    Node node_l = nodes[nodes[node].left];
+    Node node_r = nodes[nodes[node].right];
 
-    float3 lmin = nodes[L].aabb_min.xyz;
-    float3 lmax = nodes[L].aabb_max.xyz;
-    float3 rmin = nodes[R].aabb_min.xyz;
-    float3 rmax = nodes[R].aabb_max.xyz;
+    float3 lmin = node_l.aabb_min.xyz;
+    float3 lmax = node_l.aabb_max.xyz;
+    float3 rmin = node_r.aabb_min.xyz;
+    float3 rmax = node_r.aabb_max.xyz;
 
-    float lmass = nodes[L].com.w;
-    float rmass = nodes[R].com.w;
-    float3 lcom = nodes[L].com.xyz;
-    float3 rcom = nodes[R].com.xyz;
+    float lmass = node_l.com.w;
+    float rmass = node_r.com.w;
+    float3 lcom = node_l.com.xyz;
+    float3 rcom = node_r.com.xyz;
 
     nodes[node].aabb_min = float4(min(lmin, rmin), 0.0);
     nodes[node].aabb_max = float4(max(lmax, rmax), 0.0);

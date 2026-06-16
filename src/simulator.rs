@@ -49,6 +49,13 @@ struct ComputeMassPc {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+struct SkipSetPc {
+    node_buffer_id: u32,
+    num_of_particles: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 struct IntegratePc {
     particle_buffer_id: u32,
     indices_buffer_id: u32,
@@ -65,6 +72,7 @@ pub struct SimulationPipelines {
     build_tree: ComputePipeline,
     parent_set: ComputePipeline,
     compute_mass: ComputePipeline,
+    skip_set: ComputePipeline,
     integrate: ComputePipeline,
 }
 
@@ -76,6 +84,7 @@ impl SimulationPipelines {
             build_tree: create_compute_pipeline(include_bytes!("../compiled/tree.spv")),
             parent_set: create_compute_pipeline(include_bytes!("../compiled/parent.spv")),
             compute_mass: create_compute_pipeline(include_bytes!("../compiled/com.spv")),
+            skip_set: create_compute_pipeline(include_bytes!("../compiled/skip_set.spv")),
             integrate: create_compute_pipeline(include_bytes!("../compiled/integrate.spv")),
         };
     }
@@ -228,7 +237,6 @@ impl Simulator {
             &[],
         );
 
-        cmd.fill_buffer(&self.tree_buffer, 0, 2 * self.num_of_particles as u64 * NODE_SIZE, 1000000000);
         cmd.barriers(
             Some(&GlobalBarrier {
                 previous_accesses: &[AccessType::TransferWrite],
@@ -303,6 +311,21 @@ impl Simulator {
         );
 
         // traverse and ingtegrate
+        cmd.bind_compute_pipeline(&self.pipelines.skip_set);
+        cmd.push_constants(&SkipSetPc {
+            node_buffer_id: self.tree_buffer.descriptor_index(),
+            num_of_particles: self.num_of_particles,
+        });
+        cmd.dispatch(u32::div_ceil(2 * self.num_of_particles - 1, 256), 1, 1);
+
+        cmd.barriers(
+            Some(&GlobalBarrier {
+                previous_accesses: &[AccessType::ComputeShaderStorageWrite],
+                next_accesses: &[AccessType::ComputeShaderStorageRead],
+            }),
+            &[],
+        );
+
         cmd.bind_compute_pipeline(&self.pipelines.integrate);
         cmd.push_constants(&IntegratePc {
             particle_buffer_id: self.particle_buffer.descriptor_index(),
@@ -310,10 +333,10 @@ impl Simulator {
             node_buffer_id: self.tree_buffer.descriptor_index(),
             num_of_particles: self.num_of_particles,
             dt: 0.016,
-            theta: 0.8,
+            theta: 1.5,
             epsilon: 0.3,
         });
-        cmd.dispatch(groups, 1, 1);
+        cmd.dispatch(u32::div_ceil(self.num_of_particles, 32), 1, 1);
     }
 
     pub fn readback_raw(&self, buffer: &Buffer, byte_size: u64) -> Vec<u8> {
@@ -422,6 +445,15 @@ impl Simulator {
             cmd.dispatch(groups, 1, 1);
         });
 
+        time_pass("skip_set", &|cmd| {
+            cmd.bind_compute_pipeline(&self.pipelines.skip_set);
+            cmd.push_constants(&SkipSetPc {
+                node_buffer_id: self.tree_buffer.descriptor_index(),
+                num_of_particles: self.num_of_particles,
+            });
+            cmd.dispatch(u32::div_ceil(2 * self.num_of_particles - 1, 256), 1, 1);
+        });
+
         time_pass("integrate", &|cmd| {
             cmd.bind_compute_pipeline(&self.pipelines.integrate);
             cmd.push_constants(&IntegratePc {
@@ -430,7 +462,7 @@ impl Simulator {
                 node_buffer_id: self.tree_buffer.descriptor_index(),
                 num_of_particles: self.num_of_particles,
                 dt: 0.016,
-                theta: 0.8,
+                theta: 1.5,
                 epsilon: 0.3,
             });
             cmd.dispatch(groups, 1, 1);
@@ -464,17 +496,18 @@ fn test() {
 
     let particles: Vec<Particle> = (0..N)
         .map(|_| {
-            // Exponential radial distribution
             let r = rng.random_range(0.0..radius);
             let theta = rng.random_range(0.0..360.0f32).to_radians();
-
             let x = r * theta.cos();
             let z = r * theta.sin();
+            let y = rng.random_range(-150.0..150.0);
+            let vx = r * theta.sin();
+            let vz = -r * theta.cos();
 
             Particle {
-                position: [x, 0.0, z],
-                velocity: [0.0; 3],
-                mass: 1.0,
+                position: [x, y, z],
+                velocity: [vx, 0.0, vz],
+                mass: 1000.0,
                 radius: 0.3,
             }
         })
@@ -482,92 +515,9 @@ fn test() {
 
     let sim = Simulator::new(&particles);
 
-    for i in 0..10 {
+    for i in 0..100000 {
         println!("{}", i);
         sim.record_and_time_simulation();
         println!();
     }
-
-    let dbg = sim.readback_as::<Node>(&sim.tree_buffer, 2 * N - 1);
-    validate_and_trace(&dbg, N);
-}
-
-fn validate_and_trace(nodes: &[Node], num_particles: usize) {
-    let total_nodes = 2 * num_particles - 1;
-    let leaf_offset = num_particles - 1;
-
-    // 1. Find the first node with an invalid child pointer
-    for i in 0..leaf_offset {
-        let node = &nodes[i];
-        if node.left >= total_nodes as u32 {
-            println!("Invalid left child at internal node {}", i);
-            println!("  left = {}, right = {}", node.left, node.right);
-            println!("Tracing parent chain from this node up to root:");
-            let mut cur = i;
-            while cur != 0xFFFFFFFF as usize && cur < total_nodes {
-                println!("  node {}", cur);
-                let parent = nodes[cur].parent as usize;
-                if parent == 0xFFFFFFFF as usize {
-                    break;
-                }
-                cur = parent;
-            }
-            // Also find which node points to this node as a child
-            println!("Finding nodes that have this node as child:");
-            for j in 0..leaf_offset {
-                if nodes[j].left == i as u32 || nodes[j].right == i as u32 {
-                    println!("  node {} has this node as child (left={}, right={})", j, nodes[j].left, nodes[j].right);
-                }
-            }
-            panic!("Tree validation failed at node {}", i);
-        }
-        if node.right >= total_nodes as u32 {
-            println!("Invalid right child at internal node {}", i);
-            println!("  left = {}, right = {}", node.left, node.right);
-            let mut cur = i;
-            while cur != 0xFFFFFFFF as usize && cur < total_nodes {
-                println!("  node {}", cur);
-                let parent = nodes[cur].parent as usize;
-                if parent == 0xFFFFFFFF as usize {
-                    break;
-                }
-                cur = parent;
-            }
-            panic!("Tree validation failed at node {}", i);
-        }
-    }
-
-    // 2. Check that every internal node's parent pointer matches
-    for i in 0..leaf_offset {
-        let left = nodes[i].left as usize;
-        let right = nodes[i].right as usize;
-        if left < total_nodes && nodes[left].parent != i as u32 {
-            println!("Parent mismatch: node {} parent is {} but node {} has left child {}", left, nodes[left].parent, i, left);
-            let mut cur = i;
-            while cur != 0xFFFFFFFF as usize && cur < total_nodes {
-                println!("  node {}", cur);
-                let parent = nodes[cur].parent as usize;
-                if parent == 0xFFFFFFFF as usize {
-                    break;
-                }
-                cur = parent;
-            }
-            panic!("Parent validation failed");
-        }
-        if right < total_nodes && nodes[right].parent != i as u32 {
-            println!("Parent mismatch: node {} parent is {} but node {} has right child {}", right, nodes[right].parent, i, right);
-            let mut cur = i;
-            while cur != 0xFFFFFFFF as usize && cur < total_nodes {
-                println!("  node {}", cur);
-                let parent = nodes[cur].parent as usize;
-                if parent == 0xFFFFFFFF as usize {
-                    break;
-                }
-                cur = parent;
-            }
-            panic!("Parent validation failed");
-        }
-    }
-
-    println!("Tree validation passed.");
 }
